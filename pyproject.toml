@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fenicsx_pml"
+version = "1.0.0"
+description = "Locally Conformal PML generator for FEniCSx based on Gmsh meshes"
+readme = "README.md"
+authors = [{ name = "Antonio Baiano Svizzero", email = "antonio.bs@undabit.com" }]
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "gmsh",
+    "libigl", 
+]
+
+[project.urls]
+"Homepage" = "https://github.com/bayswiss/fenicsx_pml"
+"Bug Tracker" = "https://github.com/bayswiss/fenicsx_pml/issues"
+
