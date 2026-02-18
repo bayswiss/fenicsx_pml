@@ -14,7 +14,7 @@ class LcPML:
         self.d_pml = d_pml
         self.n_layers = n_layers
         self.comm = comm
-        self.rank = comm.Get_rank()
+        self.rank = comm.rank
         
         self.mesh = None
         self.functions = {}
@@ -50,17 +50,16 @@ class LcPML:
         self._fill_local_data()
         self._compute_tensors()
 
-    def export(self, filename="pml_output.bp"):
+    def export(self, out_filename="pml_output.bp"):
         if self.functions:
-            with VTXWriter(self.comm, filename, list(self.functions.values()), engine="BP4") as vtx:
+            with VTXWriter(self.comm, out_filename, list(self.functions.values()), engine="BP4") as vtx:
                 vtx.write(0.0)
 
     def _rank0_generate(self):
         gmsh.initialize()
         gmsh.option.setString("Geometry.OCCTargetUnit", "M")
         
-        path = os.path.dirname(os.path.abspath(__file__))
-        gmsh.merge(os.path.join(path, self.filename))
+        gmsh.merge(self.filename)
 
         surf_ntags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(2, 3)
         entities = gmsh.model.getEntitiesForPhysicalGroup(2, 3)
