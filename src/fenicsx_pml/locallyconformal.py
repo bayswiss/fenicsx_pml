@@ -6,7 +6,7 @@ from mpi4py import MPI
 from petsc4py import PETSc
 from dolfinx.io import gmshio, VTXWriter
 from dolfinx.fem import Function, functionspace, Constant
-from ufl import ln, outer
+from ufl import ln, Identity, grad, outer, det, inv
 
 class LcPML:
     def __init__(self, filename, d_pml, n_layers, comm=MPI.COMM_WORLD):
@@ -170,17 +170,21 @@ class LcPML:
 
     def _compute_tensors(self):
         k0 = self.k0
-        n, t1, t2 = self.functions["n"], self.functions["t1"], self.functions["t2"]
-        k1, k2, csi = self.functions["k1"], self.functions["k2"], self.functions["csi"]
-
+        n = self.functions["n"]
+        csi = self.functions["csi"]
+        
+        I = Identity(3)
+        
+        # 1. Define the absorbing functions 
+        # (Assuming the hyperbolic function from the paper)
         sigma = 1 / (self.d_pml - csi)
-        f_log = -ln(1 - csi / self.d_pml)
-        h2, h3 = 1 + k1 * csi, 1 + k2 * csi
-
-        s1 = 1 + 1/(1j*k0)*sigma
-        s2 = 1 + k1 * f_log/(1j*k0*h2)
-        s3 = 1 + k2 * f_log/(1j*k0*h3)
-
-        self.detJ = s1 * s2 * s3
-        self.Lambda_PML= (s2*s3/s1)*outer(n, n) + (s1*s3/s2)*outer(t1, t1) + (s1*s2/s3)*outer(t2, t2)
+        f_csi = -ln(1 - csi / self.d_pml) 
+        
+        # 2. Compute the complex deformation gradient J_pml
+        # grad(n) is the shape operator (curvature tensor) computed automatically by FEM
+        J_pml = I - (1 / (1j * k0)) * (sigma * outer(n, n) + f_csi * grad(n))
+        
+        # 3. Compute final PML properties according to the paper's Equation 14
+        self.detJ = det(J_pml)
+        self.Lambda_PML = self.detJ * inv(J_pml) * inv(J_pml).T
   
