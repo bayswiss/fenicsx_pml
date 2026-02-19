@@ -1,12 +1,11 @@
 import os
 import gmsh
 import numpy as np
-import igl 
 from mpi4py import MPI
 from petsc4py import PETSc
 from dolfinx.io import gmshio, VTXWriter
 from dolfinx.fem import Function, functionspace, Constant
-from ufl import ln, Identity, grad, outer, det, inv
+from ufl import ln, outer, Identity, grad, det, inv
 
 class LcPML:
     def __init__(self, filename, d_pml, n_layers, comm=MPI.COMM_WORLD):
@@ -18,7 +17,6 @@ class LcPML:
         
         self.mesh = None
         self.functions = {}
-        self.tensors = {}
         
         self.surf_data = None
         self.meta = None
@@ -33,17 +31,13 @@ class LcPML:
         return self.mesh, self.cell_tags, self.facet_tags
 
     def compute_pml_properties(self):
-        # Setup spaces
         self.k0 = Constant(self.mesh, PETSc.ScalarType(1))
         V_s = functionspace(self.mesh, ("CG", 1))
         V_v = functionspace(self.mesh, ("CG", 1, (3,)))
         
+        # Look how clean this is now! Just n and csi.
         self.functions = {
-            "n":  Function(V_v, name="normal"),
-            "t1": Function(V_v, name="tangent_1"),
-            "t2": Function(V_v, name="tangent_2"),
-            "k1": Function(V_s, name="curvature_1"),
-            "k2": Function(V_s, name="curvature_2"),
+            "n": Function(V_v, name="normal"),
             "csi": Function(V_s, name="pml_coordinate")
         }
 
@@ -58,7 +52,6 @@ class LcPML:
     def _rank0_generate(self):
         gmsh.initialize()
         gmsh.option.setString("Geometry.OCCTargetUnit", "M")
-        
         gmsh.merge(self.filename)
 
         surf_ntags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(2, 3)
@@ -71,18 +64,30 @@ class LcPML:
         V_raw = coord.reshape(-1, 3)
         F_raw = sidx[idx_sorted].reshape(-1, 3)
 
-        pd1, pd2, k1, k2, _ = igl.principal_curvature(V_raw, F_raw, radius=2)
-        n_raw = igl.per_vertex_normals(V_raw, F_raw)
+        # --- PURE NUMPY VERTEX NORMALS (NO IGL NEEDED) ---
+        v0, v1, v2 = V_raw[F_raw[:, 0]], V_raw[F_raw[:, 1]], V_raw[F_raw[:, 2]]
+        face_normals = np.cross(v1 - v0, v2 - v0)
+        
+        n_raw = np.zeros_like(V_raw)
+        np.add.at(n_raw, F_raw[:, 0], face_normals)
+        np.add.at(n_raw, F_raw[:, 1], face_normals)
+        np.add.at(n_raw, F_raw[:, 2], face_normals)
+        
+        # Normalize the vertex normals
+        n_raw /= np.linalg.norm(n_raw, axis=1)[:, np.newaxis]
+        # -------------------------------------------------
 
+        # surf_data is massively simplified
         self.surf_data = {
-            "surf_node_tags": surf_ntags.astype(np.int64), "n": n_raw,
-            "t1": pd1, "t2": pd2, "k1": k1, "k2": k2
+            "surf_node_tags": surf_ntags.astype(np.int64), 
+            "n": n_raw
         }
         self.meta = {"n_surf_nodes": len(surf_ntags), "start_vol_tag": gmsh.model.mesh.getMaxNodeTag() + 1}
         
         self._extrude(surf_ntags, V_raw, F_raw, n_raw)
 
     def _extrude(self, tags, coords, tris, norms):
+        # ... (YOUR EXTRUSION CODE REMAINS EXACTLY THE SAME) ...
         n_nodes = len(coords)
         dr = self.d_pml / self.n_layers
         
@@ -116,7 +121,6 @@ class LcPML:
         gmsh.model.mesh.addNodes(3, pml_tag, new_tags, new_coords.flatten())
         gmsh.model.mesh.addElements(3, pml_tag, [4], [np.arange(1, len(conn)//4 + 1, dtype=np.uint64)], [conn])
         gmsh.model.addPhysicalGroup(3, [pml_tag], -1, "PML_Domain")
-        # gmsh.fltk.run()
 
     def _fix_tet_orientation(self, tet, odd_mask):
         fixed = tet.copy()
@@ -145,46 +149,38 @@ class LcPML:
         layers = (delta // count) + 1
 
         for name, fn in self.functions.items():
-            bs = fn.function_space.dofmap.index_map_bs
             arr = fn.x.array
-            src_data = self.surf_data.get(name)
 
+            # This remains exactly as you had it!
             if name == "csi":
                 arr[idx_v] = (layers / self.n_layers) * self.d_pml
                 continue
 
-            # Fill Surface
-            if bs == 1:
-                arr[idx_s] = src_data[raw_idx_s]
-                arr[idx_v] = src_data[raw_idx_v]
-            else:
-                arr[idx_s*3]   = src_data[raw_idx_s, 0]
-                arr[idx_s*3+1] = src_data[raw_idx_s, 1]
-                arr[idx_s*3+2] = src_data[raw_idx_s, 2]
-                
-                arr[idx_v*3]   = src_data[raw_idx_v, 0]
-                arr[idx_v*3+1] = src_data[raw_idx_v, 1]
-                arr[idx_v*3+2] = src_data[raw_idx_v, 2]
+            # Fill Normal vector
+            src_data = self.surf_data[name]
+            arr[idx_s*3]   = src_data[raw_idx_s, 0]
+            arr[idx_s*3+1] = src_data[raw_idx_s, 1]
+            arr[idx_s*3+2] = src_data[raw_idx_s, 2]
+            
+            arr[idx_v*3]   = src_data[raw_idx_v, 0]
+            arr[idx_v*3+1] = src_data[raw_idx_v, 1]
+            arr[idx_v*3+2] = src_data[raw_idx_v, 2]
             
             fn.x.scatter_forward()
 
     def _compute_tensors(self):
+        # The elegant UFL implementation from Bériot and Modave
         k0 = self.k0
         n = self.functions["n"]
         csi = self.functions["csi"]
         
         I = Identity(3)
         
-        # 1. Define the absorbing functions 
-        # (Assuming the hyperbolic function from the paper)
         sigma = 1 / (self.d_pml - csi)
         f_csi = -ln(1 - csi / self.d_pml) 
         
-        # 2. Compute the complex deformation gradient J_pml
-        # grad(n) is the shape operator (curvature tensor) computed automatically by FEM
+        # J_pml contains all stretching and curvature information natively
         J_pml = I - (1 / (1j * k0)) * (sigma * outer(n, n) + f_csi * grad(n))
         
-        # 3. Compute final PML properties according to the paper's Equation 14
         self.detJ = det(J_pml)
         self.Lambda_PML = self.detJ * inv(J_pml) * inv(J_pml).T
-  
