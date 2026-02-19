@@ -21,7 +21,8 @@ class LcPML:
         self.surf_data = None
         self.meta = None
 
-    def generate(self):
+    def generate(self, physical_group):
+        self.physical_group = physical_group
         if self.rank == 0:
             self._rank0_generate()
         
@@ -54,8 +55,8 @@ class LcPML:
         gmsh.option.setString("Geometry.OCCTargetUnit", "M")
         gmsh.merge(self.filename)
 
-        surf_ntags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(2, 3)
-        entities = gmsh.model.getEntitiesForPhysicalGroup(2, 3)
+        surf_ntags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(2, self.physical_group)
+        entities = gmsh.model.getEntitiesForPhysicalGroup(2, self.physical_group)
         
         faces = np.concatenate([gmsh.model.mesh.getElementFaceNodes(2, 3, e) for e in entities])
         sidx = np.argsort(surf_ntags)
