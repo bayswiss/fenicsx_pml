@@ -3,9 +3,16 @@ import gmsh
 import numpy as np
 from mpi4py import MPI
 from petsc4py import PETSc
-from dolfinx.io import gmshio, VTXWriter
+from dolfinx import __version__ as dolfinx_version
+from packaging.version import Version
+if Version(dolfinx_version) > Version("0.9.0"):
+    from dolfinx.io import gmsh as gmshio, VTXWriter
+else: 
+    from dolfinx.io import gmshio, VTXWriter
+
 from dolfinx.fem import Function, functionspace, Constant
 from ufl import ln, outer, Identity, grad, det, inv
+
 
 class LcPML:
     def __init__(self, filename, d_pml, n_layers, comm=MPI.COMM_WORLD):
@@ -28,7 +35,14 @@ class LcPML:
         
         self.surf_data = self.comm.bcast(self.surf_data, root=0)
         self.meta = self.comm.bcast(self.meta, root=0)
-        self.mesh, self.cell_tags, self.facet_tags = gmshio.model_to_mesh(gmsh.model, self.comm, 0)
+        # self.mesh, self.cell_tags, self.facet_tags = gmshio.model_to_mesh(gmsh.model, self.comm, 0)
+        mesh_data = gmshio.model_to_mesh(gmsh.model, self.comm, 0, gdim=3)
+        if Version(dolfinx_version) > Version("0.9.0"):
+            self.mesh = mesh_data.mesh
+            self.cell_tags = mesh_data.cell_tags
+            self.facet_tags = mesh_data.facet_tags
+        else:
+            self.mesh, self.cell_tags, self.facet_tags = mesh_data
         return self.mesh, self.cell_tags, self.facet_tags
 
     def compute_pml_properties(self):
@@ -118,9 +132,16 @@ class LcPML:
         conn = np.vstack(tets).flatten().astype(np.uint64)
         pml_tag = gmsh.model.getEntities(3)[-1][1] + 1 if gmsh.model.getEntities(3) else 1
         
+#       Get the highest element tag currently in the mesh to avoid collisions
+        max_elem_tag = gmsh.model.mesh.getMaxElementTag()
+        n_new_elems = len(conn) // 4
+        
+        new_elem_tags = np.arange(max_elem_tag + 1, max_elem_tag + 1 + n_new_elems, dtype=np.uint64)
+        
         gmsh.model.addDiscreteEntity(3, pml_tag)
         gmsh.model.mesh.addNodes(3, pml_tag, new_tags, new_coords.flatten())
-        gmsh.model.mesh.addElements(3, pml_tag, [4], [np.arange(1, len(conn)//4 + 1, dtype=np.uint64)], [conn])
+
+        gmsh.model.mesh.addElements(3, pml_tag, [4], [new_elem_tags], [conn])
         gmsh.model.addPhysicalGroup(3, [pml_tag], -1, "PML_Domain")
 
     def _fix_tet_orientation(self, tet, odd_mask):
