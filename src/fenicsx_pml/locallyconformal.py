@@ -35,7 +35,7 @@ class LcPML:
         
         self.surf_data = self.comm.bcast(self.surf_data, root=0)
         self.meta = self.comm.bcast(self.meta, root=0)
-        # self.mesh, self.cell_tags, self.facet_tags = gmshio.model_to_mesh(gmsh.model, self.comm, 0)
+        
         mesh_data = gmshio.model_to_mesh(gmsh.model, self.comm, 0, gdim=3)
         if Version(dolfinx_version) > Version("0.9.0"):
             self.mesh = mesh_data.mesh
@@ -50,7 +50,7 @@ class LcPML:
         V_s = functionspace(self.mesh, ("CG", 1))
         V_v = functionspace(self.mesh, ("CG", 1, (3,)))
         
-        # Look how clean this is now! Just n and csi.
+        
         self.functions = {
             "n": Function(V_v, name="normal"),
             "csi": Function(V_s, name="pml_coordinate")
@@ -79,7 +79,6 @@ class LcPML:
         V_raw = coord.reshape(-1, 3)
         F_raw = sidx[idx_sorted].reshape(-1, 3)
 
-        # --- PURE NUMPY VERTEX NORMALS (NO IGL NEEDED) ---
         v0, v1, v2 = V_raw[F_raw[:, 0]], V_raw[F_raw[:, 1]], V_raw[F_raw[:, 2]]
         face_normals = np.cross(v1 - v0, v2 - v0)
         
@@ -88,11 +87,8 @@ class LcPML:
         np.add.at(n_raw, F_raw[:, 1], face_normals)
         np.add.at(n_raw, F_raw[:, 2], face_normals)
         
-        # Normalize the vertex normals
         n_raw /= np.linalg.norm(n_raw, axis=1)[:, np.newaxis]
-        # -------------------------------------------------
 
-        # surf_data is massively simplified
         self.surf_data = {
             "surf_node_tags": surf_ntags.astype(np.int64), 
             "n": n_raw
@@ -102,7 +98,6 @@ class LcPML:
         self._extrude(surf_ntags, V_raw, F_raw, n_raw)
 
     def _extrude(self, tags, coords, tris, norms):
-        # ... (YOUR EXTRUSION CODE REMAINS EXACTLY THE SAME) ...
         n_nodes = len(coords)
         dr = self.d_pml / self.n_layers
         
@@ -132,7 +127,6 @@ class LcPML:
         conn = np.vstack(tets).flatten().astype(np.uint64)
         pml_tag = gmsh.model.getEntities(3)[-1][1] + 1 if gmsh.model.getEntities(3) else 1
         
-#       Get the highest element tag currently in the mesh to avoid collisions
         max_elem_tag = gmsh.model.mesh.getMaxElementTag()
         n_new_elems = len(conn) // 4
         
@@ -173,12 +167,10 @@ class LcPML:
         for name, fn in self.functions.items():
             arr = fn.x.array
 
-            # This remains exactly as you had it!
             if name == "csi":
                 arr[idx_v] = (layers / self.n_layers) * self.d_pml
                 continue
 
-            # Fill Normal vector
             src_data = self.surf_data[name]
             arr[idx_s*3]   = src_data[raw_idx_s, 0]
             arr[idx_s*3+1] = src_data[raw_idx_s, 1]
@@ -191,7 +183,6 @@ class LcPML:
             fn.x.scatter_forward()
 
     def _compute_tensors(self):
-        # The elegant UFL implementation from Bériot and Modave
         k0 = self.k0
         n = self.functions["n"]
         csi = self.functions["csi"]
@@ -201,7 +192,6 @@ class LcPML:
         sigma = 1 / (self.d_pml - csi)
         f_csi = -ln(1 - csi / self.d_pml) 
         
-        # J_pml contains all stretching and curvature information natively
         J_pml = I - (1 / (1j * k0)) * (sigma * outer(n, n) + f_csi * grad(n))
         
         self.detJ = det(J_pml)
