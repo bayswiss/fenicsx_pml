@@ -32,7 +32,7 @@ class LcPML:
         self.physical_group = physical_group
         if self.rank == 0:
             self._rank0_generate()
-        
+            
         self.surf_data = self.comm.bcast(self.surf_data, root=0)
         self.meta = self.comm.bcast(self.meta, root=0)
         
@@ -43,12 +43,16 @@ class LcPML:
             self.facet_tags = mesh_data.facet_tags
         else:
             self.mesh, self.cell_tags, self.facet_tags = mesh_data
+
+        if self.rank == 0:
+            gmsh.finalize()
+            
         return self.mesh, self.cell_tags, self.facet_tags
 
     def compute_pml_properties(self):
         self.k0 = Constant(self.mesh, PETSc.ScalarType(1))
-        V_s = functionspace(self.mesh, ("CG", 1))
-        V_v = functionspace(self.mesh, ("CG", 1, (3,)))
+        V_s = functionspace(self.mesh, ("Lagrange", 1))
+        V_v = functionspace(self.mesh, ("Lagrange", 1, (3,)))
         
         
         self.functions = {
@@ -192,7 +196,7 @@ class LcPML:
         sigma = 1 / (self.d_pml - csi)
         f_csi = -ln(1 - csi / self.d_pml) 
         
-        J_pml = I - (1 / (1j * k0)) * (sigma * outer(n, n) + f_csi * grad(n))
+        J_pml = I + (1 / (1j * k0)) * (sigma * outer(n, n) + f_csi * grad(n)) # e^j*omega*t time harmonic convention
         
         self.detJ = det(J_pml)
         self.Lambda_PML = self.detJ * inv(J_pml) * inv(J_pml).T
