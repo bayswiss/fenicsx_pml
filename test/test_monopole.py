@@ -63,21 +63,21 @@ def test_monopole_accuracy():
     ksp.solve(jrwQb, ph.x.petsc_vec)
     ph.x.scatter_forward()
 
-    # --- YOUR ORIGINAL SUBMESH LOGIC ---
     i_nopml = cell_tags.indices[(cell_tags.values == 1)]
-    msh_nopml, entity_map, vertex_map, geom_map = create_submesh(msh, msh.topology.dim, i_nopml)
+    msh_nopml, entity_map, vertex_map, geom_map = create_submesh(msh, msh.topology.dim, i_nopml,)
     V_nopml = functionspace(msh_nopml, ("Lagrange", deg))
     ph_nopml = Function(V_nopml)
     ph_nopml.name = "p_nopml"
+    ph_nopml.x.array[:] = 0
 
-    fine_mesh_cell_map = msh_nopml.topology.index_map(msh_nopml.topology.dim)
-    num_cells_on_proc = fine_mesh_cell_map.size_local + fine_mesh_cell_map.num_ghosts
+    cell_map = msh_nopml.topology.index_map(msh_nopml.topology.dim)
+    num_cells_on_proc = cell_map.size_local + cell_map.num_ghosts
     interp_cells = np.arange(num_cells_on_proc, dtype=np.int32)
     interp_data = create_interpolation_data(V_nopml, V, interp_cells, padding=1e-14)
     
     ph_nopml.interpolate_nonmatching(ph, interp_cells, interp_data)
     ph_nopml.x.scatter_forward()
-
+    dx_nopml = Measure("dx", domain=msh_nopml, subdomain_data=i_nopml)
     # Exact solution on the submesh
     p_exact = Function(V_nopml)
     p_exact.name = "p_exact"
@@ -89,12 +89,12 @@ def test_monopole_accuracy():
     p_exact.interpolate(exact_solution)
     p_exact.x.scatter_forward()
     
-    error_p = Function(V_nopml)
-    error_p.name = "error_p"
-    error_p.x.array[:] = p_exact.x.array - ph_nopml.x.array
+    error = Function(V_nopml)
+    error.name = "error_p"
+    error.x.array[:] = p_exact.x.array - ph_nopml.x.array
 
     # Export exactly as you had it
-    vtx_nopml = VTXWriter(msh_nopml.comm, "fields/u_nopml.bp", [ph_nopml, p_exact, error_p], engine="BP4")
+    vtx_nopml = VTXWriter(msh_nopml.comm, "fields/u_nopml.bp", [ph_nopml, p_exact, error], engine="BP4")
     vtx_nopml.write(0)
     vtx_nopml.close()
 
@@ -103,36 +103,37 @@ def test_monopole_accuracy():
     coords = V_nopml.tabulate_dof_coordinates()
     dists = np.linalg.norm(coords - x_S_exact, axis=1)
     
-    # Mask out the singularity purely in NumPy
+    # Mask out the singularity
     valid_dofs = dists >= r_excl
     
     # Max Error
     local_max = np.max(np.abs(ph_nopml.x.array[valid_dofs] - p_exact.x.array[valid_dofs]))
-    print(local_max)
     max_err = comm.allreduce(local_max, op=MPI.MAX)
+    
+    # Relative L2 Error
+    x_ufl = ufl.SpatialCoordinate(msh_nopml)
+    r_ufl = ufl.sqrt((x_ufl[0] - x_S_exact[0])**2 + (x_ufl[1] - x_S_exact[1])**2 + (x_ufl[2] - x_S_exact[2])**2)
+    mask = ufl.conditional(ufl.ge(ufl.real(r_ufl), r_excl), 1.0, 0.0)
+
+    L2_error_local = assemble_scalar(form(inner(error, error) * mask * dx_nopml))
+    L2_error = np.sqrt(np.real(msh_nopml.comm.allreduce(L2_error_local, op=MPI.SUM)))
+
+    L2_p_exact_local = assemble_scalar(form(inner(p_exact, p_exact) * mask * dx_nopml))
+    L2_p_exact = np.sqrt(np.real(msh_nopml.comm.allreduce(L2_p_exact_local, op=MPI.SUM)))
+
+    if L2_p_exact > 0:
+        rel_L2_error = L2_error/L2_p_exact
+    else:
+        rel_L2_error = 0
+
     if comm.rank == 0:
-        print(max_err)
-    
-    # # Relative L2 Error (Discrete approximation over valid DOFs)
-    # if np.any(valid_dofs):
-    #     local_l2_num = np.sum(np.abs(uh_nopml.x.array[valid_dofs] - u_exact.x.array[valid_dofs])**2)
-    #     local_l2_den = np.sum(np.abs(u_exact.x.array[valid_dofs])**2)
-    # else:
-    #     local_l2_num, local_l2_den = 0.0, 0.0
-        
-    # global_l2_num = comm.allreduce(local_l2_num, op=MPI.SUM)
-    # global_l2_den = comm.allreduce(local_l2_den, op=MPI.SUM)
-    
-    # rel_l2_err = np.sqrt(global_l2_num) / np.sqrt(global_l2_den) if global_l2_den > 0 else 0.0
+        print(f"\nMax Abs Error:  {max_err:.4e}")
+        print(f"Relative L2:    {rel_L2_error:.4%}")
 
-    # if comm.rank == 0:
-    #     print(f"\nMax Abs Error:  {max_err:.4e}")
-    #     print(f"Relative L2:    {rel_l2_err:.4%}")
-
-    # assert rel_l2_err < 0.05, f"Relative L2 error too high: {rel_l2_err:.2%}"
+    assert rel_L2_error < 0.01, f"Relative L2 error too high: {rel_L2_error:.2%}"
     assert max_err < 1e-1, f"Max error exploded: {max_err:.2e}"
     
 
 
-if __name__ == "__main__": 
-    test_monopole_accuracy()
+# if __name__ == "__main__": 
+#     test_monopole_accuracy()
