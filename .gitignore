@@ -1,3 +1,7 @@
+# Output files 
+*.bp
+test/fields/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
