@@ -28,7 +28,7 @@ class LcPML:
         self.surf_data = None
         self.meta = None
 
-    def generate(self, physical_group):
+    def generate(self, physical_group, export_mesh=False):
         self.physical_group = physical_group
         if self.rank == 0:
             self._rank0_generate()
@@ -45,6 +45,8 @@ class LcPML:
             self.mesh, self.cell_tags, self.facet_tags = mesh_data
 
         if self.rank == 0:
+            if export_mesh == True:
+                gmsh.write("pml.msh")
             gmsh.finalize()
             
         return self.mesh, self.cell_tags, self.facet_tags
@@ -53,7 +55,6 @@ class LcPML:
         self.k0 = Constant(self.mesh, PETSc.ScalarType(1))
         V_s = functionspace(self.mesh, ("Lagrange", 1))
         V_v = functionspace(self.mesh, ("Lagrange", 1, (3,)))
-        
         
         self.functions = {
             "n": Function(V_v, name="normal"),

@@ -6,9 +6,10 @@ from fenicsx_pml import LcPML
 @pytest.fixture
 def pml_setup():
     """Fixture to generate the PML once per test session."""
-    pml = LcPML("air.msh", d_pml=0.03, n_layers=3, comm=MPI.COMM_WORLD)
+    pml = LcPML("trapezoid.msh", d_pml=0.03, n_layers=3, comm=MPI.COMM_WORLD)
     msh, cell_tags, facet_tags = pml.generate(physical_group=3)
     pml.compute_pml_properties()
+    pml.export()
     return pml, msh
 
 def test_csi_bounds(pml_setup):

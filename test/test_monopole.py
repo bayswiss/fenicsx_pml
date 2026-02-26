@@ -1,6 +1,7 @@
 import numpy as np
 import ufl
 import pytest
+from dolfinx import la
 from dolfinx.fem import Function, functionspace, assemble_scalar, form, create_interpolation_data
 from dolfinx.fem.petsc import assemble_matrix
 from dolfinx.mesh import create_submesh
@@ -28,7 +29,7 @@ def test_monopole_accuracy():
     else:
         x_S_source = np.zeros((0, 3))
     
-    pml = LcPML("air.msh", 0.03, 3, comm=comm)
+    pml = LcPML("polyhedron.msh", 0.03, 3, comm=comm)
     msh, cell_tags, facet_tags = pml.generate(physical_group=3)
     pml.compute_pml_properties()
     pml.k0.value = k0_val
@@ -41,7 +42,9 @@ def test_monopole_accuracy():
     b = Function(V)
     point_source = PointSource(V, x_S_source, magnitude=1)
     point_source.apply_to_vector(b)
-
+    b.x.scatter_reverse(la.InsertMode.add)
+    b.x.scatter_forward()
+    
     dx = Measure("dx", domain=msh, subdomain_data=cell_tags, metadata={"quadrature_degree": 3*deg})
 
     a = (inner(grad(p), grad(v)) - pml.k0**2 * inner(p, v)) * dx(1) + \
@@ -78,6 +81,7 @@ def test_monopole_accuracy():
     ph_nopml.interpolate_nonmatching(ph, interp_cells, interp_data)
     ph_nopml.x.scatter_forward()
     dx_nopml = Measure("dx", domain=msh_nopml)
+
     # Exact solution on the submesh
     p_exact = Function(V_nopml)
     p_exact.name = "p_exact"
@@ -130,10 +134,5 @@ def test_monopole_accuracy():
         print(f"\nMax Abs Error:  {max_err:.4e}")
         print(f"Relative L2:    {rel_L2_error:.4%}")
 
-    # assert rel_L2_error < 0.01, f"Relative L2 error too high: {rel_L2_error:.2%}"
-    # assert max_err < 1e-1, f"Max error exploded: {max_err:.2e}"
-    
-
-
-if __name__ == "__main__": 
-    test_monopole_accuracy()
+    assert rel_L2_error < 0.01, f"Relative L2 error too high: {rel_L2_error:.2%}"
+    assert max_err < 1e-1, f"Max error exploded: {max_err:.2e}"
