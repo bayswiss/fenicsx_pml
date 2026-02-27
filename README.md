@@ -44,7 +44,7 @@ pip install -e .
 
 from fenicsx_pml import LcPML
 
-# Import mesh, generate layers
+# Import mesh, generate layers, compute pml properties
 LcPML(filename="name.msh", d_pml=0.03, n_layers = 3)
 msh, cell_tags, facet_tags = pml.generate(physical_group=3)
 pml.compute_pml_properties()
