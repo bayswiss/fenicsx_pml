@@ -16,7 +16,7 @@ This tool requires **FEniCSx** with complex build of PETSc. We recommend install
     conda activate fenicsx-env
     conda install -c conda-forge fenics-dolfinx mpich petsc=*=complex* 
     ```
-Alternative ways toinstall FEniCSx: [https://github.com/FEniCS/dolfinx?tab=readme-ov-file#installation](https://github.com/FEniCS/dolfinx?tab=readme-ov-file#installation)
+Alternative ways to install FEniCSx: [https://github.com/FEniCS/dolfinx?tab=readme-ov-file#installation](https://github.com/FEniCS/dolfinx?tab=readme-ov-file#installation)
 ## Installation
 
 Once you are inside your FEniCSx environment, download this repository and install it:
