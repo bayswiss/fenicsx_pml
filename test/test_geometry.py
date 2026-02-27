@@ -1,3 +1,9 @@
+# Copyright (C) 2026 Antonio Baiano Svizzero
+#
+# This file is part of FEniCSx_PML (https://github.com/bayswiss/fenicsx_pml)
+#
+# SPDX-License-Identifier:    GPL-3.0-or-later
+
 import numpy as np
 import pytest
 from mpi4py import MPI
@@ -5,8 +11,7 @@ from fenicsx_pml import LcPML
 
 @pytest.fixture
 def pml_setup():
-    """Fixture to generate the PML once per test session."""
-    pml = LcPML("polyhedron.msh", d_pml=0.03, n_layers=3, comm=MPI.COMM_WORLD)
+    pml = LcPML("box.msh", d_pml=0.03, n_layers=3, comm=MPI.COMM_WORLD)
     msh, _ , __ = pml.generate(physical_group=3)
     pml.compute_pml_properties()
     pml.export()

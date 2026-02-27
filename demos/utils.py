@@ -1,3 +1,9 @@
+# Copyright (C) 2026 Antonio Baiano Svizzero and Jørgen S. Dokken
+#
+# This file is part of FEniCSx_PML (https://github.com/bayswiss/fenicsx_pml)
+#
+# SPDX-License-Identifier:    GPL-3.0-or-later
+
 import numpy as np
 import numpy.typing as npt 
 from dolfinx import geometry, default_scalar_type
