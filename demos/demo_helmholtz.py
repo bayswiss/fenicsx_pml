@@ -4,6 +4,8 @@
 #
 # SPDX-License-Identifier:    GPL-3.0-or-later
 
+# Frequency sweep of an acoustic monopole source in a PML-bounded domain.
+
 import numpy as np
 import ufl
 from dolfinx import la
@@ -18,14 +20,14 @@ from scifem import PointSource
 from utils import MicrophonePressure, plot_complex_spectra
 from fenicsx_pml import LcPML
 
-#frequency range definition
+# Init frequencies
 frequencies = np.arange(100, 5000, 200)
 
-# fluid quantities definition
+# Init fluid params
 c0 = 340
 rho_0 = 1.225
 
-# PML generation
+# Gen PML
 pml = LcPML(
     filename="../test/box.msh",
     d_pml=0.03, 
@@ -34,7 +36,7 @@ pml = LcPML(
 msh, cell_tags, facet_tags = pml.generate(physical_group=3)
 pml.compute_pml_properties()
 
-# Source amplitude and position
+# Set source
 Q = 1e-4
 
 if msh.comm.rank == 0:
@@ -42,20 +44,20 @@ if msh.comm.rank == 0:
 else:
     x_S = np.zeros((0, 3))
 
-# Test and trial function spaces
+# Init FEM spaces
 deg = 2
 V = functionspace(msh, ("CG", deg))
 p = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)  
 
-# PoinSource (Monopole)
+# Set monopole RHS
 b = Function(V)
 point_source = PointSource(V, x_S, magnitude=1)
 point_source.apply_to_vector(b)
 b.x.scatter_reverse(la.InsertMode.add)
 b.x.scatter_forward()
 
-# Weak Form
+# Def weak form
 dx = Measure("dx", domain=msh, subdomain_data=cell_tags, metadata={"quadrature_degree": 3*deg})
 
 a  = (
@@ -67,18 +69,18 @@ a_form = form(a)
 A = assemble_matrix(a_form, bcs=[])
 A.assemble()
 
-# S
+# Init solution func
 ph      = Function(V)
 ph.name = "p"
 
-# Solver setup
+# Init solver
 ksp = PETSc.KSP().create(msh.comm)
 ksp.setOperators(A)
 ksp.setType("preonly")
 ksp.getPC().setType("lu")
 ksp.getPC().setFactorSolverType("mumps")
 
-# Creation of the submesh without the PML on which the soultion is projected
+# Gen submesh
 i_INT = cell_tags.indices[(cell_tags.values==1)] # 
 msh_INT, entity_map, vertex_map, geom_map = create_submesh(msh, msh.topology.dim, i_INT)
 V_INT = functionspace(msh_INT, ("CG", deg))
@@ -89,15 +91,15 @@ num_cells_on_proc = fine_mesh_cell_map.size_local + fine_mesh_cell_map.num_ghost
 interp_cells = np.arange(num_cells_on_proc, dtype=np.int32)
 interpolation_data = create_interpolation_data(V_INT, V, interp_cells, padding=1e-14)
 
-# Spectrum initialization
+# Init arrays
 p_mic = np.zeros((len(frequencies),1),dtype=complex)
 
-# Microphone 
+# Set mic
 x_mic = np.array([0.0, 0.0, 0.0]) 
 
 mic = MicrophonePressure(msh, x_mic)
 
-# Export setup (for the PML removed for nice visual)
+# Init export
 export_fields = True
 if export_fields:
     vtx_nopml = VTXWriter(msh_INT.comm, "fields/p_nopml.bp", [ph_nopml], engine="BP4")
@@ -109,44 +111,48 @@ for nf, f in enumerate(frequencies):
     
     omega = 2 * np.pi * f
 
-    # PML forms are frequency dependent. Update k0: IMPORTANT!!!
+    # Update k0
     pml.k0.value = omega / c0
 
-    # Reassemble matrix
+    # Reassemble A
     A.zeroEntries()
     assemble_matrix(A, a_form)
     A.assemble()
     
-    # Define load vector
+    # Def RHS
     jrwQb = 1j * rho_0 * omega * Q * b.x.petsc_vec
 
     # Solve
     ksp.solve(jrwQb, ph.x.petsc_vec)
     ph.x.scatter_forward()
     
-    # Interpolate solution on subdomain (without PML)
+    # Interp submesh
     ph_nopml.interpolate_nonmatching(ph,
                                      interp_cells,
                                      interpolation_data)
     
-    # Export fields (optional)
+    # Export
     if export_fields:
         vtx_nopml.write(f)
     
-    # Evaluate pressure at mic location
+    # Eval mic
     p_f = mic.listen(ph)
     p_f = msh.comm.gather(p_f, root=0)
     
-    # Fill spectrum
+    # Store p
     if msh.comm.rank == 0: 
         assert p_f is not None
         p_mic[nf] = np.hstack(p_f)
 
 
-# Plot computed spectrum against Monopole analytic formula
+# Plot
 import matplotlib.pyplot as plt
 
 def monopole_pressure(f, r, Q, c=340, rho=1.225):
+    """
+    Compute analytic pressure of an acoustic monopole.
+
+    """
     omega = 2 * np.pi * f
     k = omega / c
 
@@ -156,7 +162,7 @@ if msh.comm.rank == 0:
     R = np.linalg.norm(x_mic - x_S)
     p_analytic = monopole_pressure(frequencies, R, 1e-4)
     
-    # Custom tool to plot amplitude and phase
+    # Plot spectra
     plot_complex_spectra(
         x_axis=frequencies,
         p_spectra_list=[p_mic, p_analytic],

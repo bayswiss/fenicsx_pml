@@ -22,6 +22,15 @@ from ufl import ln, outer, Identity, grad, det, inv
 
 class LcPML:
     def __init__(self, filename, d_pml, n_layers, comm=MPI.COMM_WORLD):
+        """
+        Initialize the LcPML class.
+
+        Args:
+            filename (str): Path to the GMSH file.
+            d_pml (float): Total thickness of the PML.
+            n_layers (int): Number of PML layers to extrude.
+            comm (MPI.Comm, optional): MPI communicator.
+        """
         self.filename = filename
         self.d_pml = d_pml
         self.n_layers = n_layers
@@ -35,13 +44,25 @@ class LcPML:
         self.meta = None
 
     def generate(self, physical_group, export_mesh=False):
+        """
+        Generate the PML mesh and return the dolfinx mesh objects.
+
+        Args:
+            physical_group (int): GMSH physical group tag of the surface to extrude from.
+            export_mesh (bool, optional): Whether to export the generated mesh to 'pml.msh'
+
+        Returns:
+            tuple: A tuple containing (mesh, cell_tags, facet_tags).
+        """
         self.physical_group = physical_group
         if self.rank == 0:
             self._rank0_generate()
             
+        # Broadcast data to all ranks
         self.surf_data = self.comm.bcast(self.surf_data, root=0)
         self.meta = self.comm.bcast(self.meta, root=0)
         
+        # Convert GMSH model to dolfinx mesh
         mesh_data = gmshio.model_to_mesh(gmsh.model, self.comm, 0, gdim=3)
         if Version(dolfinx_version) > Version("0.9.0"):
             self.mesh = mesh_data.mesh
@@ -58,6 +79,9 @@ class LcPML:
         return self.mesh, self.cell_tags, self.facet_tags
 
     def compute_pml_properties(self):
+        """
+        Set up function spaces, compute normal/coordinate fields, and calculate PML tensors.
+        """
         self.k0 = Constant(self.mesh, PETSc.ScalarType(1))
         V_s = functionspace(self.mesh, ("Lagrange", 1))
         V_v = functionspace(self.mesh, ("Lagrange", 1, (3,)))
@@ -71,18 +95,29 @@ class LcPML:
         self._compute_tensors()
 
     def export(self, out_filename="pml_output.bp"):
+        """
+        Export computed fields to a VTX file.
+
+        Args:
+            out_filename (str, optional): The output filename. Defaults to "pml_output.bp".
+        """
         if self.functions:
             with VTXWriter(self.comm, out_filename, list(self.functions.values()), engine="BP4") as vtx:
                 vtx.write(0.0)
 
     def _rank0_generate(self):
+        """
+        Internal method for rank 0 to read GMSH, extract surface data, compute normals, and trigger extrusion.
+        """
         gmsh.initialize()
         gmsh.option.setString("Geometry.OCCTargetUnit", "M")
         gmsh.merge(self.filename)
 
+        # Get surface nodes
         surf_ntags, coord = gmsh.model.mesh.getNodesForPhysicalGroup(2, self.physical_group)
         entities = gmsh.model.getEntitiesForPhysicalGroup(2, self.physical_group)
         
+        # Get face nodes
         faces = np.concatenate([gmsh.model.mesh.getElementFaceNodes(2, 3, e) for e in entities])
         sidx = np.argsort(surf_ntags)
         idx_sorted = np.searchsorted(surf_ntags, faces, sorter=sidx)
@@ -90,15 +125,17 @@ class LcPML:
         V_raw = coord.reshape(-1, 3)
         F_raw = sidx[idx_sorted].reshape(-1, 3)
 
+        # Compute face normals
         v0, v1, v2 = V_raw[F_raw[:, 0]], V_raw[F_raw[:, 1]], V_raw[F_raw[:, 2]]
         face_normals = np.cross(v1 - v0, v2 - v0)
         
+        # Accumulate vertex normals
         n_raw = np.zeros_like(V_raw)
         np.add.at(n_raw, F_raw[:, 0], face_normals)
         np.add.at(n_raw, F_raw[:, 1], face_normals)
         np.add.at(n_raw, F_raw[:, 2], face_normals)
         
-        n_raw /= np.linalg.norm(n_raw, axis=1)[:, np.newaxis]
+        n_raw /= np.linalg.norm(n_raw, axis=1)[:, np.newaxis] # Normalize
 
         self.surf_data = {
             "surf_node_tags": surf_ntags.astype(np.int64), 
@@ -109,9 +146,19 @@ class LcPML:
         self._extrude(surf_ntags, V_raw, F_raw, n_raw)
 
     def _extrude(self, tags, coords, tris, norms):
+        """
+        Extrude surface elements into PML volume layers.
+
+        Args:
+            tags (np.ndarray): Node tags of the base surface.
+            coords (np.ndarray): Coordinates of the base surface nodes.
+            tris (np.ndarray): Triangle connectivity array.
+            norms (np.ndarray): Normal vectors at the nodes.
+        """
         n_nodes = len(coords)
         dr = self.d_pml / self.n_layers
         
+        # Sort for consistency
         sort_p = np.argsort(tris, axis=1)
         tris_s = np.take_along_axis(tris, sort_p, axis=1)
         is_odd = ((sort_p[:,1]-sort_p[:,0])*(sort_p[:,2]-sort_p[:,1])*(sort_p[:,2]-sort_p[:,0])) < 0
@@ -121,10 +168,12 @@ class LcPML:
         new_coords = np.zeros((self.n_layers * n_nodes, 3))
         tag_map = np.vstack([tags, new_tags.reshape(self.n_layers, n_nodes)])
 
+        # Calculate new coordinates
         for L in range(1, self.n_layers + 1):
             new_coords[(L-1)*n_nodes : L*n_nodes] = coords + norms * (L * dr)
 
         tets = []
+        # Build tetrahedra layer by layer
         for L in range(self.n_layers):
             b, t = tag_map[L, tris_s], tag_map[L+1, tris_s]
             
@@ -143,6 +192,7 @@ class LcPML:
         
         new_elem_tags = np.arange(max_elem_tag + 1, max_elem_tag + 1 + n_new_elems, dtype=np.uint64)
         
+        # Add to GMSH model
         gmsh.model.addDiscreteEntity(3, pml_tag)
         gmsh.model.mesh.addNodes(3, pml_tag, new_tags, new_coords.flatten())
 
@@ -150,20 +200,35 @@ class LcPML:
         gmsh.model.addPhysicalGroup(3, [pml_tag], -1, "PML_Domain")
 
     def _fix_tet_orientation(self, tet, odd_mask):
+        """
+        Corrects tetrahedron orientation based on odd/even parity.
+
+        Args:
+            tet (np.ndarray): Array of tets
+            odd_mask (np.ndarray): Boolean mask indicating elements that need swapping.
+
+        Returns:
+            np.ndarray: Corrected tetrahedron array.
+        """
         fixed = tet.copy()
-        fixed[odd_mask, 2], fixed[odd_mask, 3] = tet[odd_mask, 3], tet[odd_mask, 2]
+        fixed[odd_mask, 2], fixed[odd_mask, 3] = tet[odd_mask, 3], tet[odd_mask, 2] # Swap nodes
         return fixed
 
     def _fill_local_data(self):
+        """
+        Populate dolfinx function arrays with coordinate and normal data.
+        """
         local_tags = self.mesh.geometry.input_global_indices.astype(np.int64) + 1
         raw_tags = self.surf_data["surf_node_tags"]
         
         sorter = np.argsort(raw_tags)
         sorted_tags = raw_tags[sorter]
         
+        # Surface indices
         is_surf = np.isin(local_tags, raw_tags)
         idx_s = np.where(is_surf)[0]
         
+        # Volume indices
         start, count = self.meta["start_vol_tag"], self.meta["n_surf_nodes"]
         is_vol = (local_tags >= start) & (local_tags < start + self.n_layers * count)
         idx_v = np.where(is_vol)[0]
@@ -171,6 +236,7 @@ class LcPML:
         pos = np.searchsorted(sorted_tags, local_tags[idx_s])
         raw_idx_s = sorter[pos]
         
+        # Layer calculation
         delta = local_tags[idx_v] - start
         raw_idx_v = delta % count 
         layers = (delta // count) + 1
@@ -179,7 +245,7 @@ class LcPML:
             arr = fn.x.array
 
             if name == "csi":
-                arr[idx_v] = (layers / self.n_layers) * self.d_pml
+                arr[idx_v] = (layers / self.n_layers) * self.d_pml # Scale coordinate
                 continue
 
             src_data = self.surf_data[name]
@@ -194,6 +260,9 @@ class LcPML:
             fn.x.scatter_forward()
 
     def _compute_tensors(self):
+        """
+        Compute the PML Jacobian and related UFL tensors.
+        """
         k0 = self.k0
         n = self.functions["n"]
         csi = self.functions["csi"]
@@ -203,6 +272,7 @@ class LcPML:
         sigma = 1 / (self.d_pml - csi)
         f_csi = -ln(1 - csi / self.d_pml) 
         
+        # Calculate Jacobian
         J_pml = I + (1 / (1j * k0)) * (sigma * outer(n, n) + f_csi * grad(n)) # e^j*omega*t time harmonic convention
         
         self.detJ = det(J_pml)
