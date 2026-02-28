@@ -11,11 +11,11 @@ This tool requires **FEniCSx** with complex build of PETSc. We recommend install
 
 **Install FEniCSx via Conda:**
     
-    ```bash
-    conda create -n fenicsx-env
-    conda activate fenicsx-env
-    conda install -c conda-forge fenics-dolfinx mpich petsc=*=complex* 
-    ```
+```bash
+conda create -n fenicsx-env
+conda activate fenicsx-env
+conda install -c conda-forge fenics-dolfinx mpich petsc=*=complex* 
+```
 Alternative ways to install FEniCSx: [https://github.com/FEniCS/dolfinx?tab=readme-ov-file#installation](https://github.com/FEniCS/dolfinx?tab=readme-ov-file#installation)
 ## Installation
 
